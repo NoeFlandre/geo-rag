@@ -55,7 +55,7 @@ pipeline:
     - snapshotusa
 
   # Public Hugging Face Datasets packaging options
-  relativize_paths: true
+  relativize_paths: false
   relativize_mappings:
     - "/path/to/offline_dataset_1:offline_dataset_1"
     - "/path/to/offline_dataset_2:offline_dataset_2"
