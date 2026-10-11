@@ -1162,82 +1162,131 @@ def resolve_offline_image_path(
         return None
 
     if not image_root_dirs:
+        env_dirs = os.environ.get("IMAGE_ROOT_DIR") or os.environ.get(
+            "OFFLINE_DATASET_DIRS"
+        )
+        if env_dirs:
+            image_root_dirs = env_dirs
+        else:
+            local_defaults = ["./images", "./data", "images", "data"]
+            image_root_dirs = [d for d in local_defaults if os.path.isdir(d)]
+            if not image_root_dirs and url and os.path.isfile(url):
+                return os.path.abspath(url)
+
+    if not image_root_dirs:
         return None
 
-    dirs = [image_root_dirs] if isinstance(image_root_dirs, str) else image_root_dirs
-    for d in dirs:
-        if not d:
+    if isinstance(image_root_dirs, (str, bytes, os.PathLike)):
+        image_root_dirs = [image_root_dirs]
+
+    dirs = []
+    for item in image_root_dirs:
+        if not item:
             continue
+        if isinstance(item, str):
+            item = os.path.expanduser(item.strip())
+            if " " in item and not os.path.exists(item):
+                for part in item.split():
+                    p = os.path.expanduser(part.strip())
+                    if p and os.path.exists(p):
+                        dirs.append(os.path.abspath(p))
+                continue
+        if os.path.exists(item):
+            dirs.append(os.path.abspath(item))
 
-        # 0. Try direct relative path join first
-        p_direct = os.path.join(d, url) if url else None
-        if p_direct and os.path.exists(p_direct):
-            return os.path.abspath(p_direct)
+    if not dirs:
+        return None
 
-        # A. Try direct lookup using Photo_ID (flat file, train/ folder, or nested)
-        if photo_id:
-            photo_str = str(photo_id).strip()
-            if photo_str.endswith(".0"):
-                photo_str = photo_str[:-2]
-            for ext in [".jpg", ".jpeg", ".png", ".webp", ".JPG", ".JPEG"]:
-                # 1. Platform-specific subfolder lookup (e.g. d/platform/photo_id.jpg)
-                if platform:
-                    plat_str = str(platform).strip().lower()
-                    p_plat = os.path.join(d, plat_str, f"{photo_str}{ext}")
-                    if os.path.exists(p_plat):
-                        return os.path.abspath(p_plat)
+    extensions = [
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".webp",
+        ".tif",
+        ".tiff",
+        ".JPG",
+        ".JPEG",
+        ".PNG",
+    ]
+    plat_str = str(platform).strip().lower() if platform else ""
+    photo_str = str(photo_id).strip() if photo_id is not None else ""
+    if photo_str.endswith(".0"):
+        photo_str = photo_str[:-2]
 
-                # 2. Flat lookup
-                p_flat = os.path.join(d, f"{photo_str}{ext}")
-                if os.path.exists(p_flat):
-                    return os.path.abspath(p_flat)
+    # Clean and extract relative candidate paths from url
+    rel_candidates = []
+    if url and isinstance(url, str):
+        clean_u = url.split("://")[1] if "://" in url else url
+        clean_u = clean_u.split("?")[0].split("#")[0].replace("\\", "/")
+        rel_u = clean_u.lstrip("/")
+        if rel_u:
+            rel_candidates.append(rel_u)
+        if plat_str and rel_u.lower().startswith(f"{plat_str}/"):
+            rel_candidates.append(rel_u[len(plat_str) + 1 :])
+        parts = rel_u.split("/")
+        if len(parts) > 1:
+            rel_candidates.append("/".join(parts[-2:]))
+            if len(parts) > 2:
+                rel_candidates.append("/".join(parts[-3:]))
+        bname = os.path.basename(rel_u)
+        if bname and bname not in rel_candidates:
+            rel_candidates.append(bname)
 
-                # 2. train/ flat lookup
-                p_train = os.path.join(d, "train", f"{photo_str}{ext}")
-                if os.path.exists(p_train):
-                    return os.path.abspath(p_train)
+    for d in dirs:
+        candidate_subdirs = [d]
+        standard_subdirs = ["images", "img", "photos", "train"]
+        if plat_str:
+            standard_subdirs.extend(
+                [
+                    plat_str,
+                    f"{plat_str}_scraped",
+                    f"{plat_str}_scraped/images",
+                    f"{plat_str}/images",
+                    f"images/{plat_str}",
+                    f"{plat_str}_data",
+                    f"{plat_str}_subset",
+                ]
+            )
+        for sub in standard_subdirs:
+            sub_path = os.path.join(d, sub)
+            if os.path.isdir(sub_path):
+                candidate_subdirs.append(sub_path)
 
-                # 3. Nested GLDv2 lookup (e.g. d/a/b/c/id.jpg)
+        for sub_dir in candidate_subdirs:
+            # 1. Match against relative URL candidates and case variations
+            for rel_c in rel_candidates:
+                p = os.path.join(sub_dir, rel_c)
+                if os.path.isfile(p):
+                    return os.path.abspath(p)
+                if "." in rel_c:
+                    stem, ext = os.path.splitext(rel_c)
+                    for e in [ext.lower(), ext.upper()]:
+                        if e != ext:
+                            p_alt = os.path.join(sub_dir, f"{stem}{e}")
+                            if os.path.isfile(p_alt):
+                                return os.path.abspath(p_alt)
+                else:
+                    for ext in extensions:
+                        p_ext = os.path.join(sub_dir, f"{rel_c}{ext}")
+                        if os.path.isfile(p_ext):
+                            return os.path.abspath(p_ext)
+
+            # 2. Match against photo_id
+            if photo_str:
+                for ext in extensions:
+                    p_pid = os.path.join(sub_dir, f"{photo_str}{ext}")
+                    if os.path.isfile(p_pid):
+                        return os.path.abspath(p_pid)
                 if len(photo_str) == 16:
                     p_nested = os.path.join(
-                        d, photo_str[0], photo_str[1], photo_str[2], f"{photo_str}{ext}"
-                    )
-                    if os.path.exists(p_nested):
-                        return os.path.abspath(p_nested)
-                    p_nested_train = os.path.join(
-                        d,
-                        "train",
+                        sub_dir,
                         photo_str[0],
                         photo_str[1],
                         photo_str[2],
-                        f"{photo_str}{ext}",
+                        f"{photo_str}.jpg",
                     )
-                    if os.path.exists(p_nested_train):
-                        return os.path.abspath(p_nested_train)
-
-        # B. Fallback to URL basename lookup
-        if url and isinstance(url, str):
-            clean_url = url
-            if "://" in url:
-                clean_url = url.split("://")[1]
-            basename = os.path.basename(clean_url)
-
-            basenames = [basename]
-            if "." not in basename:
-                basenames.extend(
-                    [
-                        f"{basename}{ext}"
-                        for ext in [".jpg", ".jpeg", ".png", ".webp", ".JPG", ".JPEG"]
-                    ]
-                )
-
-            for b in basenames:
-                p_base = os.path.join(d, b)
-                if os.path.exists(p_base):
-                    return os.path.abspath(p_base)
-                p_base_train = os.path.join(d, "train", b)
-                if os.path.exists(p_base_train):
-                    return os.path.abspath(p_base_train)
+                    if os.path.isfile(p_nested):
+                        return os.path.abspath(p_nested)
 
     return None
 

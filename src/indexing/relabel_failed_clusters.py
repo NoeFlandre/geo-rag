@@ -63,6 +63,9 @@ def load_image(
     if not resolved_path and os.path.exists(url):
         resolved_path = url
 
+    if not resolved_path:
+        resolved_path = resolve_offline_image_path(url, None, photo_id, platform)
+
     if resolved_path:
         try:
             img = Image.open(resolved_path).convert("RGB")
@@ -95,6 +98,13 @@ def load_image(
                 return None
 
         if not url:
+            return None
+
+        # Guard: Local file paths or schemes other than http/https should not trigger network calls
+        if not (url.startswith("http://") or url.startswith("https://")):
+            print(
+                f"Warning: Image path not found locally and has no valid URL scheme: {url}"
+            )
             return None
 
         response = requests.get(url, timeout=timeout)

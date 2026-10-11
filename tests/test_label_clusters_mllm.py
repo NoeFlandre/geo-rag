@@ -50,6 +50,49 @@ class TestLabelClustersMLLM(unittest.TestCase):
         self.assertIsNotNone(img)
         self.assertEqual(img.size, (300, 225))
 
+    def test_load_image_offline_platform_nested_images_dir(self):
+        # Create dataset structure: test_dir/wildobs_scraped/images/my_photo.JPG
+        wildobs_dir = os.path.join(self.test_dir, "wildobs_scraped")
+        images_sub = os.path.join(wildobs_dir, "images")
+        os.makedirs(images_sub, exist_ok=True)
+        img_path = os.path.join(images_sub, "my_photo.JPG")
+        img = Image.new("RGB", (400, 300), color="green")
+        img.save(img_path)
+
+        # 1. Test relative url with platform prefix
+        url = "wildobs/my_photo.JPG"
+        loaded = load_image(
+            url,
+            target_max=300,
+            image_root_dir=self.test_dir,
+            photo_id="my_photo",
+            platform="wildobs",
+        )
+        self.assertIsNotNone(loaded)
+
+        # 2. Test foreign machine absolute path
+        foreign_url = "/home/other_user/data/wildobs_scraped/images/my_photo.JPG"
+        loaded_foreign = load_image(
+            foreign_url,
+            target_max=300,
+            image_root_dir=wildobs_dir,
+            photo_id="my_photo",
+            platform="wildobs",
+        )
+        self.assertIsNotNone(loaded_foreign)
+
+    def test_load_image_non_http_no_scheme_does_not_crash(self):
+        # Non-existent local path should return None gracefully without raising MissingSchema
+        bad_url = "wildobs/nonexistent_photo_99999.JPG"
+        loaded = load_image(
+            bad_url,
+            target_max=300,
+            image_root_dir=self.test_dir,
+            photo_id="nonexistent_photo_99999",
+            platform="wildobs",
+        )
+        self.assertIsNone(loaded)
+
     def test_build_prompt_templates(self):
         # Build template with standard parameters
         rep_item = {

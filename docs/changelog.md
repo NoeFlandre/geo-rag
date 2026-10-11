@@ -2,6 +2,16 @@
 
 All notable changes and updates to the Geo-RAG codebase are documented here.
 
+## [1.0.7] - 2026-10-11
+
+### Fixed
+
+- **Offline Image Path Resolution & Local Path URL Scheme Guard (`src/utils/io.py`, `src/indexing/label_clusters_mllm.py`, `src/indexing/relabel_failed_clusters.py`)**:
+  - Enhanced [`resolve_offline_image_path`](file:///home/aaniraj/Documents/Projects/code/geo-rag/src/utils/io.py) to resolve nested `images/`, `img/`, `photos/`, `<platform>_scraped/`, and `<platform>_scraped/images/` subdirectories.
+  - Added support for platform-prefixed relative paths (e.g. `wildobs/photo.JPG`) and absolute paths originating from foreign machines (e.g. `/home/user/...`).
+  - Added case-insensitive extension normalization (`.JPG` vs `.jpg`).
+  - Added guard in `load_image` preventing invalid HTTP GET calls on local file paths without URL schemes, replacing confusing `MissingSchema` errors with clean local path warnings and fallback resolution.
+
 ## [1.0.6] - 2026-10-10
 
 ### Added
