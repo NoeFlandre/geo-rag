@@ -1,3 +1,4 @@
+import gc
 import glob
 import hashlib
 import os
@@ -7,6 +8,8 @@ from io import BytesIO
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 import requests
 from PIL import Image
@@ -95,17 +98,39 @@ def save_dataframe(
         if "compression" not in kwargs:
             kwargs["compression"] = "zstd"
 
-        df_to_save = df.copy()
-        # Generate stable photo_key using Platform and Photo_ID for all parquet files
-        if "Platform" in df_to_save.columns and "Photo_ID" in df_to_save.columns:
-            if "photo_key" not in df_to_save.columns:
+        has_embeddings = "embedding" in df.columns
+
+        # Avoid deep copy of multi-gigabyte dataframes.
+        # If embeddings are present, drop them immediately to avoid keeping duplicate array copies in RAM.
+        if has_embeddings:
+            df_to_save = df.drop(
+                columns=["embedding", "embedding_idx"], errors="ignore"
+            )
+        else:
+            df_to_save = df.copy(deep=False)
+
+        # Generate stable photo_key using fast vectorized PyArrow C++ join if missing
+        if (
+            "Platform" in df_to_save.columns
+            and "Photo_ID" in df_to_save.columns
+            and "photo_key" not in df_to_save.columns
+        ):
+            try:
+                plat_arr = pa.Array.from_pandas(df_to_save["Platform"]).cast(
+                    pa.string()
+                )
+                pid_arr = pa.Array.from_pandas(df_to_save["Photo_ID"]).cast(pa.string())
+                df_to_save["photo_key"] = pc.binary_join_element_wise(
+                    plat_arr, pid_arr, "_"
+                ).to_pandas()
+            except Exception:
                 df_to_save["photo_key"] = (
                     df_to_save["Platform"].astype(str)
                     + "_"
                     + df_to_save["Photo_ID"].astype(str)
                 )
 
-        if "embedding" in df.columns:
+        if has_embeddings:
             effective_path = (
                 base_without_tmp
                 if os.path.splitext(file_path)[1].lower() == ".tmp"
@@ -119,8 +144,9 @@ def save_dataframe(
                 base_name if "_filtered" in base_name else get_core_base_name(base_name)
             )
 
-            embs = np.vstack(df["embedding"].values)
-            dim = embs.shape[1]
+            # Determine dimension without loading entire matrix into memory
+            first_emb = df["embedding"].iloc[0]
+            dim = len(first_emb) if hasattr(first_emb, "__len__") else 768
 
             # 1. Resolve representation suffix
             if representation_type is not None:
@@ -147,7 +173,7 @@ def save_dataframe(
             elif precision == "float32":
                 dtype = np.float32
             else:
-                dtype = embs.dtype
+                dtype = getattr(first_emb, "dtype", np.float32)
 
             # Save the companion files to temporary paths first
             tmp_npy_path = file_path + f".tmp_{rep_suffix}_embeddings.npy"
@@ -156,22 +182,45 @@ def save_dataframe(
             print(
                 f" -> Automatically decoupling embeddings to companion file: {npy_path} (dtype={np.dtype(dtype).name})"
             )
-            np.save(tmp_npy_path, embs.astype(dtype))
+
+            # Memory-efficient extraction directly into destination dtype
+            n_rows = len(df)
+            if (
+                isinstance(df["embedding"].values, np.ndarray)
+                and df["embedding"].values.ndim == 2
+            ):
+                embs = df["embedding"].values.astype(dtype, copy=False)
+            else:
+                # Preallocate in target dtype to prevent having simultaneous float32 + float16 full matrices
+                embs = np.empty((n_rows, dim), dtype=dtype)
+                chunk_size = 50_000
+                for i in range(0, n_rows, chunk_size):
+                    end_idx = min(i + chunk_size, n_rows)
+                    chunk_vals = df["embedding"].iloc[i:end_idx].values
+                    if len(chunk_vals) > 0 and isinstance(chunk_vals[0], np.ndarray):
+                        embs[i:end_idx] = np.vstack(chunk_vals).astype(
+                            dtype, copy=False
+                        )
+                    else:
+                        embs[i:end_idx] = np.array(list(chunk_vals), dtype=dtype)
+
+            np.save(tmp_npy_path, embs)
+            del embs
+            gc.collect()
 
             if "photo_key" not in df_to_save.columns:
                 df_to_save["photo_key"] = "idx_" + np.arange(len(df_to_save)).astype(
                     str
                 )
 
-            # Save the companion keys file to temporary path
-            keys_df = pd.DataFrame({"photo_key": df_to_save["photo_key"]})
+            # Fast keys parquet writing directly via PyArrow (bypassing Pandas DataFrame allocation)
             keys_path = npy_path.replace(".npy", ".keys.parquet")
             print(f" -> Saving companion keys file to: {keys_path}")
-            keys_df.to_parquet(tmp_keys_path, compression="zstd")
-
-            df_to_save = df_to_save.drop(
-                columns=["embedding", "embedding_idx"], errors="ignore"
+            keys_tbl = pa.Table.from_arrays(
+                [pa.array(df_to_save["photo_key"])], names=["photo_key"]
             )
+            pq.write_table(keys_tbl, tmp_keys_path, compression="zstd")
+            del keys_tbl
 
             try:
                 df_to_save.to_parquet(file_path, index=index, **kwargs)
