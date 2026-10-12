@@ -116,12 +116,13 @@ def save_dataframe(
             and "photo_key" not in df_to_save.columns
         ):
             try:
-                plat_arr = pa.Array.from_pandas(df_to_save["Platform"]).cast(
-                    pa.string()
+                plat_arr = pa.Array.from_pandas(df_to_save["Platform"])
+                pid_arr = pa.Array.from_pandas(df_to_save["Photo_ID"]).cast(
+                    plat_arr.type
                 )
-                pid_arr = pa.Array.from_pandas(df_to_save["Photo_ID"]).cast(pa.string())
+                sep = pa.scalar("_", type=plat_arr.type)
                 df_to_save["photo_key"] = pc.binary_join_element_wise(
-                    plat_arr, pid_arr, "_"
+                    plat_arr, pid_arr, sep
                 ).to_pandas()
             except Exception:
                 df_to_save["photo_key"] = (
