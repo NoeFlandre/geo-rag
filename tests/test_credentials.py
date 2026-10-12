@@ -13,7 +13,11 @@ from src.utils.credentials import (
     get_hf_token,
     get_mapillary_token,
     get_wildlife_insights_credentials,
+    get_wildlife_insights_token,
     get_wildobs_api_key,
+)
+from src.utils.io import (
+    get_wildlife_insights_token as io_get_wildlife_insights_token,
 )
 
 
@@ -122,6 +126,16 @@ class TestCredentials(unittest.TestCase):
         cookie, token = get_wildlife_insights_credentials(search_dir=self.test_dir)
         self.assertEqual(cookie, "connect.sid=cookie123")
         self.assertEqual(token, "jwt_token_456")
+
+    def test_get_wildlife_insights_token(self):
+        os.environ["WILDLIFE_INSIGHTS_TOKEN"] = "direct_jwt_token_789"
+        # Test directly from credentials module
+        token = get_wildlife_insights_token(search_dir=self.test_dir, refresh=True)
+        self.assertEqual(token, "direct_jwt_token_789")
+
+        # Test re-exported from io module
+        token_io = io_get_wildlife_insights_token(search_dir=self.test_dir)
+        self.assertEqual(token_io, "direct_jwt_token_789")
 
     def test_find_env_file_walkup(self):
         # Create nested directory tree: test_dir / sub1 / sub2

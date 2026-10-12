@@ -7,6 +7,7 @@ from src.utils.credentials import (
     get_hf_token,
     get_mapillary_token,
     get_wildlife_insights_credentials,
+    get_wildlife_insights_token,
     get_wildobs_api_key,
     load_env,
 )
@@ -20,4 +21,5 @@ __all__ = [
     "get_hf_token",
     "get_wildobs_api_key",
     "get_wildlife_insights_credentials",
+    "get_wildlife_insights_token",
 ]

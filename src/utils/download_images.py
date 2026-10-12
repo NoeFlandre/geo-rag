@@ -15,11 +15,13 @@ from requests.adapters import HTTPAdapter
 from tqdm import tqdm
 from urllib3.util import Retry
 
-from src.utils.credentials import get_mapillary_token
+from src.utils.credentials import (
+    get_mapillary_token,
+    get_wildlife_insights_token,
+)
 from src.utils.io import (
     KNOWN_PLACEHOLDER_MD5_HASHES,
     build_offline_image_index,
-    get_wildlife_insights_token,
     is_valid_image_file,
     load_dataframe,
     load_embeddings,

@@ -1,9 +1,7 @@
 import glob
 import hashlib
-import json
 import os
 import re
-import threading
 import time
 from io import BytesIO
 
@@ -14,6 +12,8 @@ import requests
 from PIL import Image
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
+
+from src.utils.credentials import get_wildlife_insights_token
 
 
 def get_core_base_name(base_name):
@@ -1309,48 +1309,6 @@ def _get_http_session():
         _http_session.mount("https://", adapter)
         _http_session.mount("http://", adapter)
     return _http_session
-
-
-_wi_token = None
-_wi_token_lock = threading.Lock()
-
-
-def get_wildlife_insights_token(cookie=None, refresh=False):
-    """Fetches or refreshes a Wildlife Insights JWT token using the session cookie or environment variable."""
-    global _wi_token
-    with _wi_token_lock:
-        if _wi_token and not refresh:
-            return _wi_token
-        token = os.environ.get("WILDLIFE_INSIGHTS_TOKEN")
-        if token and not refresh:
-            _wi_token = token
-            return _wi_token
-        cookie = cookie or os.environ.get("WILDLIFE_INSIGHTS_COOKIE")
-        if not cookie:
-            return None
-        try:
-            r = requests.get(
-                "https://app.wildlifeinsights.org/explore",
-                headers={"Cookie": cookie, "User-Agent": "Mozilla/5.0"},
-                timeout=10,
-            )
-            match = re.search(
-                r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', r.text
-            ) or re.search(r"__NEXT_DATA__\s*=\s*(.*?);__NEXT_LOADED_PAGES__", r.text)
-            if match:
-                data = json.loads(match.group(1))
-                token_val = (
-                    data.get("props", {})
-                    .get("initialState", {})
-                    .get("auth", {})
-                    .get("token")
-                )
-                if token_val:
-                    _wi_token = token_val
-                    return _wi_token
-        except Exception:
-            pass
-        return None
 
 
 def resolve_wildlife_insights_url(url, cookie=None, token=None, photo_id=None):

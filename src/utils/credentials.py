@@ -15,9 +15,14 @@ Supports automatic discovery of .env via:
 3. Directory tree walk-up search from current working directory and repo root
 """
 
+import json
 import os
+import re
+import threading
 from pathlib import Path
 from typing import Dict, Optional, Tuple, Union
+
+import requests
 
 
 def clean_credential_value(val: Optional[str]) -> str:
@@ -199,6 +204,68 @@ def get_wildlife_insights_credentials(
     return cookie, token
 
 
+_wi_token: Optional[str] = None
+_wi_token_lock = threading.Lock()
+
+
+def get_wildlife_insights_token(
+    cookie: Optional[str] = None,
+    refresh: bool = False,
+    search_dir: Optional[Union[Path, str]] = None,
+) -> Optional[str]:
+    """Fetches or refreshes a Wildlife Insights JWT token using the session cookie or environment variable."""
+    global _wi_token
+    with _wi_token_lock:
+        if refresh:
+            _wi_token = None
+
+        if _wi_token:
+            return _wi_token
+
+        token = get_credential("WILDLIFE_INSIGHTS_TOKEN", search_dir=search_dir)
+        cookie = cookie or get_credential(
+            "WILDLIFE_INSIGHTS_COOKIE", search_dir=search_dir
+        )
+
+        if token and not (refresh and cookie):
+            _wi_token = token
+            return _wi_token
+
+        if not cookie:
+            if token:
+                _wi_token = token
+                return _wi_token
+            return None
+
+        try:
+            r = requests.get(
+                "https://app.wildlifeinsights.org/explore",
+                headers={"Cookie": cookie, "User-Agent": "Mozilla/5.0"},
+                timeout=10,
+            )
+            match = re.search(
+                r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', r.text
+            ) or re.search(r"__NEXT_DATA__\s*=\s*(.*?);__NEXT_LOADED_PAGES__", r.text)
+            if match:
+                data = json.loads(match.group(1))
+                token_val = (
+                    data.get("props", {})
+                    .get("initialState", {})
+                    .get("auth", {})
+                    .get("token")
+                )
+                if token_val:
+                    _wi_token = token_val
+                    return _wi_token
+        except Exception:
+            pass
+
+        if token:
+            _wi_token = token
+            return _wi_token
+        return None
+
+
 __all__ = [
     "clean_credential_value",
     "find_env_file",
@@ -210,4 +277,5 @@ __all__ = [
     "get_hf_token",
     "get_wildobs_api_key",
     "get_wildlife_insights_credentials",
+    "get_wildlife_insights_token",
 ]
