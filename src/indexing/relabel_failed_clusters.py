@@ -9,6 +9,7 @@ from io import BytesIO
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 import requests
 from PIL import Image
 
@@ -223,7 +224,7 @@ def build_prompt_templates(
     return prompt_step1_template, step2_prompt
 
 
-def save_dataset(df, final_results, parent_results, out_path):
+def save_dataset(df, final_results, parent_results, out_path, orig_cols=None):
     """Helper to update labels in the DataFrame and write them to the output file."""
     # Map child results
     cluster_labels = {}
@@ -306,6 +307,26 @@ def save_dataset(df, final_results, parent_results, out_path):
                 else pd.Series(dtype=str)
             )
         )
+
+    # If saving back to a decoupled sidecar, preserve only sidecar columns + new label columns
+    if orig_cols:
+        is_sidecar = ("cluster_id" in orig_cols) and (
+            "Latitude" not in orig_cols or "Longitude" not in orig_cols
+        )
+        if is_sidecar:
+            extra_label_cols = [
+                "cluster_label",
+                "cluster_description",
+                "visual_description",
+                "parent_cluster_label",
+                "parent_cluster_description",
+                "parent_visual_description",
+            ]
+            target_cols = [c for c in orig_cols if c in df.columns]
+            for col in extra_label_cols:
+                if col in df.columns and col not in target_cols:
+                    target_cols.append(col)
+            df = df[target_cols]
 
     if out_path.endswith(".pkl"):
         # Save as pkl list of dicts for backwards compatibility
@@ -434,6 +455,13 @@ def main():
         args.out = args.file
 
     print(f"Loading dataset from {args.file}...")
+    orig_cols = None
+    if not args.file.endswith(".pkl") and os.path.exists(args.file):
+        try:
+            orig_cols = pq.ParquetFile(args.file).schema_arrow.names
+        except Exception:
+            orig_cols = None
+
     if args.file.endswith(".pkl"):
         with open(args.file, "rb") as f:
             raw_data = pickle.load(f)
@@ -1111,11 +1139,11 @@ def main():
                     )
 
                 if len(final_results) % args.save_interval == 0:
-                    save_dataset(df, final_results, {}, args.out)
+                    save_dataset(df, final_results, {}, args.out, orig_cols=orig_cols)
 
         except KeyboardInterrupt:
             print("\nSequential child cluster labeling interrupted by user.")
-            save_dataset(df, final_results, {}, args.out)
+            save_dataset(df, final_results, {}, args.out, orig_cols=orig_cols)
     # 8. Query the VLM sequentially for parent clusters
     parent_results = {}
     sorted_failed_parent_ids = sorted(list(target_parent_ids))
@@ -1225,7 +1253,9 @@ def main():
                     )
 
                 if len(parent_results) % args.save_interval == 0:
-                    save_dataset(df, final_results, parent_results, args.out)
+                    save_dataset(
+                        df, final_results, parent_results, args.out, orig_cols=orig_cols
+                    )
 
         except KeyboardInterrupt:
             print("\nSequential parent cluster labeling interrupted by user.")
@@ -1233,7 +1263,7 @@ def main():
     # Final Save
     if final_results or parent_results:
         print("\nSaving final results...")
-        save_dataset(df, final_results, parent_results, args.out)
+        save_dataset(df, final_results, parent_results, args.out, orig_cols=orig_cols)
         print("Re-labeling session finished.")
     else:
         print("\nNo clusters were successfully re-labeled.")
